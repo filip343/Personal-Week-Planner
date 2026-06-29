@@ -12,9 +12,18 @@ interface Props {
   onToggleDone: (event: CalendarEvent) => void;
   onEdit: (event: CalendarEvent) => void;
   onAdd: (date: Date) => void;
+  canAdd?: boolean;
 }
 
-export default function DayColumn({ dayIndex, date, events, onToggleDone, onEdit, onAdd }: Props) {
+export default function DayColumn({
+  dayIndex,
+  date,
+  events,
+  onToggleDone,
+  onEdit,
+  onAdd,
+  canAdd = true,
+}: Props) {
   const today = isToday(date);
 
   return (
@@ -43,24 +52,32 @@ export default function DayColumn({ dayIndex, date, events, onToggleDone, onEdit
             {String(date.getDate()).padStart(2, '0')}
           </div>
         </div>
-        <button
-          onClick={() => onAdd(date)}
-          aria-label={`Add event on ${WEEKDAY_SHORT[dayIndex]}`}
-          className="mb-0.5 p-1 rounded-md text-zinc-300 dark:text-zinc-700 hover:text-accent-500 dark:hover:text-accent-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-        >
-          <Plus size={14} strokeWidth={2} />
-        </button>
+        {canAdd && (
+          <button
+            onClick={() => onAdd(date)}
+            aria-label={`Add event on ${WEEKDAY_SHORT[dayIndex]}`}
+            className="mb-0.5 p-1 rounded-md text-zinc-300 dark:text-zinc-700 hover:text-accent-500 dark:hover:text-accent-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+          >
+            <Plus size={14} strokeWidth={2} />
+          </button>
+        )}
       </div>
 
       {/* Events */}
       <div className="flex flex-col gap-1.5 flex-1">
         {events.length === 0 ? (
-          <button
-            onClick={() => onAdd(date)}
-            className="w-full min-h-[52px] rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50/70 dark:hover:bg-zinc-900/40 transition-colors flex items-center justify-center"
-          >
-            <span className="text-[10px] text-zinc-300 dark:text-zinc-700">Nothing planned</span>
-          </button>
+          canAdd ? (
+            <button
+              onClick={() => onAdd(date)}
+              className="w-full min-h-[52px] rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50/70 dark:hover:bg-zinc-900/40 transition-colors flex items-center justify-center"
+            >
+              <span className="text-[10px] text-zinc-300 dark:text-zinc-700">Nothing planned</span>
+            </button>
+          ) : (
+            <div className="w-full min-h-[52px] rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 flex items-center justify-center">
+              <span className="text-[10px] text-zinc-300 dark:text-zinc-700">Nothing planned</span>
+            </div>
+          )
         ) : (
           events.map((event) => (
             <EventCard

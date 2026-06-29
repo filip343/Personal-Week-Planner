@@ -28,6 +28,7 @@ declare global {
 }
 
 const SCOPE = 'https://www.googleapis.com/auth/calendar';
+const STORAGE_KEY = 'wp_token';
 
 let tokenClient: TokenClient | null = null;
 let currentToken: string | null = null;
@@ -36,6 +37,36 @@ let tokenExpiry = 0;
 let pendingResolve: ((token: string) => void) | null = null;
 let pendingReject: ((err: Error) => void) | null = null;
 let pending = false;
+
+function persistToken(token: string, expiry: number): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ token, expiry }));
+  } catch {}
+}
+
+function clearStoredToken(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {}
+}
+
+/** Reloads a previously persisted access token into memory if it is still valid. */
+export function restoreSession(): void {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const { token, expiry } = JSON.parse(raw) as { token?: string; expiry?: number };
+    if (token && typeof expiry === 'number' && Date.now() < expiry) {
+      currentToken = token;
+      tokenExpiry = expiry;
+    } else {
+      clearStoredToken();
+    }
+  } catch {
+    clearStoredToken();
+  }
+}
 
 export function initTokenClient(): void {
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
@@ -52,6 +83,7 @@ export function initTokenClient(): void {
       } else {
         currentToken = response.access_token;
         tokenExpiry = Date.now() + (response.expires_in - 60) * 1000;
+        persistToken(currentToken, tokenExpiry);
         pendingResolve?.(currentToken);
       }
       pendingResolve = null;
@@ -76,6 +108,7 @@ export function clearToken(): void {
   }
   currentToken = null;
   tokenExpiry = 0;
+  clearStoredToken();
 }
 
 export function getToken(silent = false): Promise<string> {
@@ -120,6 +153,7 @@ export async function authedFetch(
   });
   if (res.status === 401 && !retried) {
     currentToken = null;
+    clearStoredToken();
     return authedFetch(input, init, true);
   }
   return res;

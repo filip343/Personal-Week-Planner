@@ -1,7 +1,13 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { initTokenClient, getToken, clearToken, isTokenValid } from '@/lib/tokenManager';
+import {
+  initTokenClient,
+  getToken,
+  clearToken,
+  isTokenValid,
+  restoreSession,
+} from '@/lib/tokenManager';
 
 export type AuthState = 'loading' | 'unauthenticated' | 'authenticated' | 'error';
 
@@ -18,7 +24,20 @@ export function useAuth() {
         clearInterval(intervalId);
         clearTimeout(timeoutId);
         initTokenClient();
-        setState(isTokenValid() ? 'authenticated' : 'unauthenticated');
+        restoreSession();
+
+        // A persisted token from a previous visit is still valid — stay signed in.
+        if (isTokenValid()) {
+          setState('authenticated');
+          return;
+        }
+
+        // No valid token. Try a silent grant: succeeds without a popup if the user
+        // still has an active Google session and previously granted access.
+        // Only fall back to the login screen if that fails.
+        getToken(true)
+          .then(() => setState('authenticated'))
+          .catch(() => setState('unauthenticated'));
       }
     }
 

@@ -5,6 +5,7 @@ import { CalendarEvent, EventFormData, Category } from '@/types';
 import { useWeek } from '@/hooks/useWeek';
 import { bucketByDay, getWeekdays, getWeekBounds, toISODate, WEEKDAY_RRULE } from '@/lib/weekHelpers';
 import WeekNav from '@/components/nav/WeekNav';
+import CalendarSelector from '@/components/nav/CalendarSelector';
 import DayColumn from './DayColumn';
 import EventModal from '@/components/modal/EventModal';
 import DeleteDialog from '@/components/modal/DeleteDialog';
@@ -37,6 +38,19 @@ function buildEditPatch(form: EventFormData, scope: 'this' | 'all'): Record<stri
     },
   };
 
+  const sortedWeekdays = [...(form.weekdays ?? [])].sort((a, b) => a - b);
+
+  // For an "all" edit, anchor DTSTART to the first selected weekday. Google Calendar
+  // always emits DTSTART as an occurrence even if its weekday isn't in BYDAY, so
+  // anchoring to Monday would force a spurious Monday instance.
+  function allScopeAnchor(): string {
+    const { start: weekMon } = getWeekBounds(new Date());
+    const firstDayIdx = form.type === 'recurring' ? (sortedWeekdays[0] ?? 0) : 0;
+    const d = new Date(weekMon);
+    d.setDate(weekMon.getDate() + firstDayIdx);
+    return toISODate(d);
+  }
+
   if (form.time) {
     const [hh, mm] = form.time.split(':').map(Number);
     const pad = (n: number) => String(n).padStart(2, '0');
@@ -46,20 +60,18 @@ function buildEditPatch(form: EventFormData, scope: 'this' | 'all'): Record<stri
       base.start = { dateTime: `${form.date}T${pad(hh)}:${pad(mm)}:00`, timeZone: localTz() };
       base.end = { dateTime: `${form.date}T${pad(endHr)}:${pad(endMin)}:00`, timeZone: localTz() };
     } else if (scope === 'all') {
-      const { start: weekMon } = getWeekBounds(new Date());
-      const anchor = toISODate(weekMon);
+      const anchor = allScopeAnchor();
       base.start = { dateTime: `${anchor}T${pad(hh)}:${pad(mm)}:00`, timeZone: localTz() };
       base.end = { dateTime: `${anchor}T${pad(endHr)}:${pad(endMin)}:00`, timeZone: localTz() };
     }
   } else if (scope === 'all') {
-    const { start: weekMon } = getWeekBounds(new Date());
-    const anchor = toISODate(weekMon);
+    const anchor = allScopeAnchor();
     base.start = { date: anchor };
     base.end = { date: anchor };
   }
 
-  if (scope === 'all' && form.type === 'recurring' && form.weekdays && form.weekdays.length > 0) {
-    const days = form.weekdays.map((i) => WEEKDAY_RRULE[i]).join(',');
+  if (scope === 'all' && form.type === 'recurring' && sortedWeekdays.length > 0) {
+    const days = sortedWeekdays.map((i) => WEEKDAY_RRULE[i]).join(',');
     base.recurrence = [`RRULE:FREQ=WEEKLY;BYDAY=${days}`];
   }
 
@@ -74,6 +86,10 @@ export default function WeeklyBoard({ onSignOut }: Props) {
     loading,
     error,
     isOnline,
+    calendars,
+    activeCalendarId,
+    canWrite,
+    selectCalendar,
     prevWeek,
     nextWeek,
     thisWeek,
@@ -198,6 +214,11 @@ export default function WeeklyBoard({ onSignOut }: Props) {
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
+            <CalendarSelector
+              calendars={calendars}
+              activeCalendarId={activeCalendarId}
+              onSelect={selectCalendar}
+            />
             {error && (
               <button
                 onClick={refresh}
@@ -268,6 +289,7 @@ export default function WeeklyBoard({ onSignOut }: Props) {
                     onToggleDone={toggleDone}
                     onEdit={handleEdit}
                     onAdd={handleAdd}
+                    canAdd={canWrite}
                   />
                 ))}
               </div>
@@ -282,22 +304,30 @@ export default function WeeklyBoard({ onSignOut }: Props) {
                     <p className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
                       Nothing planned this week
                     </p>
-                    <p className="text-xs text-zinc-400 dark:text-zinc-600 mt-1">
-                      Click the&nbsp;<strong>+</strong>&nbsp;on any day column to add your first event
-                    </p>
+                    {canWrite ? (
+                      <p className="text-xs text-zinc-400 dark:text-zinc-600 mt-1">
+                        Click the&nbsp;<strong>+</strong>&nbsp;on any day column to add your first event
+                      </p>
+                    ) : (
+                      <p className="text-xs text-zinc-400 dark:text-zinc-600 mt-1">
+                        This calendar is read-only
+                      </p>
+                    )}
                   </div>
-                  <button
-                    onClick={() => handleAdd()}
-                    className="flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-accent-500 hover:bg-accent-600 rounded-lg transition-colors active:scale-[0.98]"
-                  >
-                    <Plus size={14} strokeWidth={2} />
-                    Add event
-                  </button>
+                  {canWrite && (
+                    <button
+                      onClick={() => handleAdd()}
+                      className="flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-accent-500 hover:bg-accent-600 rounded-lg transition-colors active:scale-[0.98]"
+                    >
+                      <Plus size={14} strokeWidth={2} />
+                      Add event
+                    </button>
+                  )}
                 </div>
               )}
 
               {/* Bottom add button (when there are events) */}
-              {!isFirstRun && (
+              {!isFirstRun && canWrite && (
                 <div className="mt-5 flex justify-end">
                   <button
                     onClick={() => handleAdd()}

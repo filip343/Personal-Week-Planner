@@ -5,14 +5,82 @@ import { toISODate, getWeekBounds, WEEKDAY_RRULE } from './weekHelpers';
 const BASE = 'https://www.googleapis.com/calendar/v3';
 const CALENDAR_TITLE = 'Weekly Planner';
 const CACHE_KEY = 'wp_calendar_id';
+const ACTIVE_KEY = 'wp_active_calendar_id';
 
 let _calendarId: string | null = null;
+let _activeCalendarId: string | null = null;
+
+export interface CalendarInfo {
+  id: string;
+  summary: string;
+  primary: boolean;
+  /** True when the current user can create/modify events on this calendar. */
+  writable: boolean;
+  /** True for the app's own "Weekly Planner" calendar (the default view). */
+  isPlanner: boolean;
+  backgroundColor?: string;
+}
 
 export function resetCalendarCache(): void {
   _calendarId = null;
+  _activeCalendarId = null;
   if (typeof localStorage !== 'undefined') {
     localStorage.removeItem(CACHE_KEY);
+    localStorage.removeItem(ACTIVE_KEY);
   }
+}
+
+/** The calendar id the user has chosen to view, or null to use the default Weekly Planner calendar. */
+export function getActiveCalendarId(): string | null {
+  if (_activeCalendarId) return _activeCalendarId;
+  if (typeof localStorage !== 'undefined') {
+    _activeCalendarId = localStorage.getItem(ACTIVE_KEY);
+  }
+  return _activeCalendarId;
+}
+
+export function setActiveCalendarId(id: string | null): void {
+  _activeCalendarId = id;
+  if (typeof localStorage === 'undefined') return;
+  if (id) localStorage.setItem(ACTIVE_KEY, id);
+  else localStorage.removeItem(ACTIVE_KEY);
+}
+
+/** Lists the user's calendars, defaulting the Weekly Planner calendar to the top. */
+export async function getCalendarList(): Promise<CalendarInfo[]> {
+  const res = await authedFetch(`${BASE}/users/me/calendarList?maxResults=250`);
+  if (!res.ok) throw new Error(`Calendar list failed: ${res.status}`);
+  const data = await res.json();
+  const items: CalendarInfo[] = (data.items ?? []).map(
+    (c: {
+      id: string;
+      summary: string;
+      primary?: boolean;
+      accessRole?: string;
+      backgroundColor?: string;
+    }) => ({
+      id: c.id,
+      summary: c.summary,
+      primary: !!c.primary,
+      writable: c.accessRole === 'owner' || c.accessRole === 'writer',
+      isPlanner: c.summary === CALENDAR_TITLE,
+      backgroundColor: c.backgroundColor,
+    })
+  );
+  // Surface the planner's own calendar first, then primary, then alphabetical.
+  return items.sort((a, b) => {
+    if (a.summary === CALENDAR_TITLE) return -1;
+    if (b.summary === CALENDAR_TITLE) return 1;
+    if (a.primary !== b.primary) return a.primary ? -1 : 1;
+    return a.summary.localeCompare(b.summary);
+  });
+}
+
+/** Resolves the calendar id for all event operations: the active selection, or the default. */
+async function resolveCalendarId(): Promise<string> {
+  const active = getActiveCalendarId();
+  if (active) return active;
+  return getOrCreateCalendar();
 }
 
 async function getOrCreateCalendar(): Promise<string> {
@@ -51,7 +119,7 @@ async function getOrCreateCalendar(): Promise<string> {
 }
 
 export async function getWeekEvents(weekStart: Date, weekEnd: Date): Promise<CalendarEvent[]> {
-  const cid = await getOrCreateCalendar();
+  const cid = await resolveCalendarId();
   const params = new URLSearchParams({
     singleEvents: 'true',
     timeMin: weekStart.toISOString(),
@@ -81,7 +149,7 @@ function localTz(): string {
 }
 
 export async function createEvent(form: EventFormData): Promise<CalendarEvent> {
-  const cid = await getOrCreateCalendar();
+  const cid = await resolveCalendarId();
 
   const extProps = {
     extendedProperties: {
@@ -97,11 +165,18 @@ export async function createEvent(form: EventFormData): Promise<CalendarEvent> {
   let recurrence: string[] | undefined;
 
   if (form.type === 'recurring') {
-    const days = (form.weekdays ?? []).map((i) => WEEKDAY_RRULE[i]).join(',');
+    const weekdays = [...(form.weekdays ?? [])].sort((a, b) => a - b);
+    const days = weekdays.map((i) => WEEKDAY_RRULE[i]).join(',');
     recurrence = [`RRULE:FREQ=WEEKLY;BYDAY=${days}`];
 
+    // Anchor DTSTART to the first selected weekday. Google Calendar always emits
+    // the DTSTART as an occurrence even if its weekday isn't in BYDAY, so anchoring
+    // to Monday would force a spurious Monday instance.
     const { start: weekMon } = getWeekBounds(new Date());
-    const anchorStr = toISODate(weekMon);
+    const firstDayIdx = weekdays[0] ?? 0;
+    const anchor = new Date(weekMon);
+    anchor.setDate(weekMon.getDate() + firstDayIdx);
+    const anchorStr = toISODate(anchor);
 
     if (form.time) {
       const [hh, mm] = form.time.split(':').map(Number);
@@ -150,7 +225,7 @@ export async function updateEvent(
   eventId: string,
   patch: Record<string, unknown>
 ): Promise<CalendarEvent> {
-  const cid = await getOrCreateCalendar();
+  const cid = await resolveCalendarId();
   const res = await authedFetch(
     `${BASE}/calendars/${encodeURIComponent(cid)}/events/${encodeURIComponent(eventId)}`,
     { method: 'PATCH', body: JSON.stringify(patch) }
@@ -160,7 +235,7 @@ export async function updateEvent(
 }
 
 export async function deleteEvent(eventId: string): Promise<void> {
-  const cid = await getOrCreateCalendar();
+  const cid = await resolveCalendarId();
   const res = await authedFetch(
     `${BASE}/calendars/${encodeURIComponent(cid)}/events/${encodeURIComponent(eventId)}`,
     { method: 'DELETE' }
@@ -171,7 +246,7 @@ export async function deleteEvent(eventId: string): Promise<void> {
 }
 
 export async function getEventById(eventId: string): Promise<CalendarEvent> {
-  const cid = await getOrCreateCalendar();
+  const cid = await resolveCalendarId();
   const res = await authedFetch(
     `${BASE}/calendars/${encodeURIComponent(cid)}/events/${encodeURIComponent(eventId)}`
   );
@@ -183,7 +258,7 @@ export async function markEventDone(
   event: CalendarEvent,
   done: boolean
 ): Promise<CalendarEvent> {
-  const cid = await getOrCreateCalendar();
+  const cid = await resolveCalendarId();
   const patch = {
     extendedProperties: {
       private: {
