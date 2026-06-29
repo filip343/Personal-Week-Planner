@@ -1,4 +1,4 @@
-const repo = 'weekly-planner';
+const repo = 'Personal-Week-Planner';
 const isProd = process.env.NODE_ENV === 'production';
 
 /** @type {import('next').NextConfig} */
